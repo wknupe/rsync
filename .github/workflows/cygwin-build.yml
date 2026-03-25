@@ -1,19 +1,8 @@
 name: Test rsync on Cygwin
 
 on:
-  push:
-    branches: [ master ]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  pull_request:
-    branches: [ master ]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  schedule:
-    - cron: '42 8 * * *'
-
+  workflow_dispatch:
+  
 jobs:
   test:
     runs-on: windows-2022
