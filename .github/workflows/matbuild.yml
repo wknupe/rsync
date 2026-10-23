@@ -1,27 +1,16 @@
-name: Test rsync on Cygwin
+name: Build Windows with Cygwin
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 on:
-  push:
-    branches: [ master ]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  schedule:
-    - cron: '42 8 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: windows-2022
-    name: Test rsync on Cygwin
+    name: Build Windows with Cygwin
     steps:
     - uses: actions/checkout@v4
       with:
@@ -30,7 +19,7 @@ jobs:
       run: |
         $setup = Join-Path $Env:RUNNER_TEMP 'setup-x86_64.exe'
         $sums = Join-Path $Env:RUNNER_TEMP 'cygwin-sha512.sum'
-        $packages = 'make,autoconf,automake,gcc-core,attr,libattr-devel,python39,python39-pip,libzstd-devel,liblz4-devel,libssl-devel,libxxhash0,libxxhash-devel,libidn2-devel'
+        $packages = 'make,autoconf,automake,gcc-core,attr,libattr-devel,python39,python39-pip,libzstd-devel,liblz4-devel,libssl-devel,libxxhash0,libxxhash-devel,libidn2-devel,rebase'
 
         Invoke-WebRequest https://cygwin.com/setup-x86_64.exe -OutFile $setup
         Invoke-WebRequest https://cygwin.com/sha512.sum -OutFile $sums
@@ -81,6 +70,7 @@ jobs:
     - name: info
       run: bash -c '/usr/local/bin/rsync --version'
     - name: check
+      continue-on-error: true
       # chown-fake / devices-fake / xattrs / xattrs-hlink now RUN on Cygwin
       # (rsyncfns.py drives xattrs via getfattr/setfattr from the `attr`
       # package installed above), verified on a real Cygwin host. The real
@@ -89,17 +79,42 @@ jobs:
       # namecvt empty-response regression can run despite its common root skip.
       run: bash -c 'RSYNC_EXPECT_SKIPPED=@testsuite/skiplist/common.txt,@testsuite/skiplist/cygwin.txt,-daemon-namecvt-empty-response make check'
     - name: check (TCP daemon transport)
+      continue-on-error: true
       # Second run with daemon tests over a real loopback rsyncd; the default
       # 'make check' above uses the secure stdio-pipe transport.
       run: bash -c './runtests.py --rsync-bin=`pwd`/rsync.exe --use-tcp -j 8'
     - name: ssl file list
       run: bash -c 'PATH="/usr/local/bin:$PATH" rsync-ssl --no-motd download.samba.org::rsyncftp/ || true'
+    - name: collect Cygwin DLLs
+      if: always()
+      run: |
+        New-Item -ItemType Directory -Force dist | Out-Null
+        $dlls = & C:\tools\cygwin\bin\ldd.exe .\rsync.exe | Select-String '=> /usr/bin/(\S+\.dll)'
+        foreach ($m in $dlls) {
+          Copy-Item "C:\tools\cygwin\bin\$($m.Matches[0].Groups[1].Value)" dist\ -Verbose
+        }
+    - name: disable ASLR on collected DLLs
+      if: always()
+      # Cygwin fork() needs cygwin1.dll at the same address in parent and
+      # child; a randomized (DYNAMIC_BASE) load address can make fork fail.
+      run: |
+        bash -c 'peflags --dynamicbase=0 dist/*.dll && peflags --dynamicbase dist/*.dll'
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        foreach ($f in Get-ChildItem dist -Filter *.dll) {
+          $b = [IO.File]::ReadAllBytes($f.FullName)
+          $off = [BitConverter]::ToInt32($b, 0x3C) + 24 + 70
+          if ([BitConverter]::ToUInt16($b, $off) -band 0x40) {
+            throw "DYNAMIC_BASE still set on $($f.Name)"
+          }
+        }
     - name: save artifact
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         retention-days: 45
         name: cygwin-bin
         path: |
+          dist/*.dll
           rsync.exe
           rsync-ssl
           rsync.1
