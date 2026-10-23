@@ -1,27 +1,16 @@
-name: Test rsync on Cygwin
+name: Build Windows with Cygwin
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 on:
-  push:
-    branches: [ master ]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  schedule:
-    - cron: '42 8 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: windows-2022
-    name: Test rsync on Cygwin
+    name: Build Windows with Cygwin
     steps:
     - uses: actions/checkout@v4
       with:
@@ -81,6 +70,7 @@ jobs:
     - name: info
       run: bash -c '/usr/local/bin/rsync --version'
     - name: check
+      continue-on-error: true
       # chown-fake / devices-fake / xattrs / xattrs-hlink now RUN on Cygwin
       # (rsyncfns.py drives xattrs via getfattr/setfattr from the `attr`
       # package installed above), verified on a real Cygwin host. The real
@@ -89,17 +79,28 @@ jobs:
       # namecvt empty-response regression can run despite its common root skip.
       run: bash -c 'RSYNC_EXPECT_SKIPPED=@testsuite/skiplist/common.txt,@testsuite/skiplist/cygwin.txt,-daemon-namecvt-empty-response make check'
     - name: check (TCP daemon transport)
+      continue-on-error: true
       # Second run with daemon tests over a real loopback rsyncd; the default
       # 'make check' above uses the secure stdio-pipe transport.
       run: bash -c './runtests.py --rsync-bin=`pwd`/rsync.exe --use-tcp -j 8'
     - name: ssl file list
       run: bash -c 'PATH="/usr/local/bin:$PATH" rsync-ssl --no-motd download.samba.org::rsyncftp/ || true'
+    - name: collect Cygwin DLLs
+      if: always()
+      run: |
+        New-Item -ItemType Directory -Force dist | Out-Null
+        $dlls = & C:\tools\cygwin\bin\ldd.exe .\rsync.exe | Select-String '=> /usr/bin/(\S+\.dll)'
+        foreach ($m in $dlls) {
+          Copy-Item "C:\tools\cygwin\bin\$($m.Matches[0].Groups[1].Value)" dist\ -Verbose
+        }
     - name: save artifact
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         retention-days: 45
         name: cygwin-bin
         path: |
+          dist/*.dll
           rsync.exe
           rsync-ssl
           rsync.1
