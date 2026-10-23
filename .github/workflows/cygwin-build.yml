@@ -5,18 +5,7 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  push:
-    branches: [ master ]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths-ignore:
-      - '.github/workflows/*.yml'
-      - '!.github/workflows/cygwin-build.yml'
-  schedule:
-    - cron: '42 8 * * *'
+  workflow_dispatch:
 
 jobs:
   test:
